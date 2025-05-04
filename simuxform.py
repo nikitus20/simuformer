@@ -73,18 +73,21 @@ class SimuXForm:
         batch, ntokens, dmodel = args.batch, args.ntokens, args.dmodel
         device = self.device
 
-        # Reuse precomputed if noanneal=2 and they are provided (already on device)
-        if args.noanneal == 2 and precomputed_BF is not None and precomputed_V is not None:
-            print(f'[DEBUG Head {i}] noanneal=2, reusing provided BF and V.')
-            self.BF[i] = precomputed_BF
-            self.V[i] = precomputed_V
-            return
+        # --- Use Precomputed Matrices FIRST if provided --- 
+        if precomputed_BF is not None and precomputed_V is not None:
+            # print(f'[DEBUG Head {i}] Using precomputed BF and V.') # Optional debug print
+            # Ensure they are on the correct device
+            self.BF[i] = precomputed_BF.to(device)
+            self.V[i] = precomputed_V.to(device)
+            return # Done for this head
         
-        # Reuse already generated if noanneal=2 and they exist (already on device)
+        # --- If not precomputed, check for NOANNEAL=2 reuse --- 
         if args.noanneal == 2 and self.BF[i] is not None and self.V[i] is not None:
              print(f'[DEBUG Head {i}] noanneal=2, reusing existing BF and V.')
-             return
+             return # Done for this head
 
+        # --- If not precomputed and not reused, GENERATE matrices ---
+        # Determine batch size for generation based on noanneal
         pp = 1 if args.noanneal > 0 else batch
 
         with torch.no_grad():
@@ -266,8 +269,26 @@ class SimuXForm:
 
             for i in range(n_heads):
                 # Handle potential batch dimension mismatch (pp vs batch)
-                bf_i = self.BF[i].expand(batch, -1, -1) if self.BF[i].size(0) == 1 and batch > 1 else self.BF[i]
-                v_i = self.V[i].expand(batch, -1, -1) if self.V[i].size(0) == 1 and batch > 1 else self.V[i]
+                # Ensure bf_i and v_i have a batch dimension before expanding
+                # bf_i_base = self.BF[i].unsqueeze(0) if self.BF[i].dim() == 2 else self.BF[i]
+                # v_i_base = self.V[i].unsqueeze(0) if self.V[i].dim() == 2 else self.V[i]
+                # bf_i = bf_i_base.expand(batch, -1, -1) if bf_i_base.size(0) == 1 and batch > 1 else bf_i_base
+                # v_i = v_i_base.expand(batch, -1, -1) if v_i_base.size(0) == 1 and batch > 1 else v_i_base
+                
+                # Simpler approach: directly unsqueeze and expand if needed.
+                bf_i = self.BF[i]
+                if bf_i.dim() == 2:
+                     bf_i = bf_i.unsqueeze(0).expand(batch, -1, -1)
+                elif bf_i.size(0) == 1 and batch > 1:
+                     bf_i = bf_i.expand(batch, -1, -1)
+                # Ensure bf_i is now [batch, dmodel, dmodel]
+
+                v_i = self.V[i]
+                if v_i.dim() == 2:
+                     v_i = v_i.unsqueeze(0).expand(batch, -1, -1)
+                elif v_i.size(0) == 1 and batch > 1:
+                     v_i = v_i.expand(batch, -1, -1)
+                 # Ensure v_i is now [batch, dmodel, dmodel]
 
                 # Calculate Q^T K equivalent: M @ BF[i] @ M^T
                 # Use torch.baddbmm for potentially better performance/memory
