@@ -36,6 +36,7 @@ class SimuXForm:
 
         self.eta = eta
         self.n_heads = n_heads
+        self.last_regen_time_int = -1 # Track last integer time for regeneration
 
         # Initialize tensors on the correct device
         with torch.no_grad():
@@ -101,7 +102,7 @@ class SimuXForm:
                 BF1 = torch.randn(pp, dmodel, dmodel, device=device)
                 bf_i = (BF1 + BF1.transpose(1, 2)) / math.sqrt(2)
                 normV = math.sqrt(dmodel + 1) # Only diff from mode 2 is this normV
-            elif args.randomKQ == 4: # GPT-2 style init (std=0.02)
+            elif args.randomKQ == 4 or args.randomKQ == 5: # Modes 4 and 5 use same init
                 bf_i = torch.randn(pp, dmodel, dmodel, device=device) * 0.02
                 normV = 1.0 # Define normV=1.0 so randomV=2/3 use BF/-BF directly
             else: # Identity (randomKQ=0)
@@ -122,7 +123,7 @@ class SimuXForm:
                 if self.BF[i] is None:
                     raise ValueError("BF[i] must be generated before V[i] can be derived in mode 3.")
                 v_i = -self.BF[i] / normV
-            elif args.randomV == 4: # GPT-2 style init (std=0.02)
+            elif args.randomV == 4 or args.randomV == 5: # Modes 4 and 5 use same init
                 v_i = torch.randn(pp, dmodel, dmodel, device=device) * 0.02
             else: # Identity (randomV=0)
                 v_i = torch.eye(dmodel, device=device).unsqueeze(0).expand(pp, -1, -1)
@@ -357,6 +358,18 @@ class SimuXForm:
             else:
                 raise ValueError(f"Unknown normalization mode: {args.norm}")
 
+        # --- Regeneration Logic for modes 5 ---
+        new_time = current_time + eta 
+        new_time_int = math.floor(new_time)
+        
+        if new_time_int > self.last_regen_time_int and (args.randomKQ == 5 or args.randomV == 5):
+            print(f"[INFO] Regenerating KQ/V matrices at time t ~ {new_time:.2f} (crossed integer step {new_time_int})", file=sys.stderr)
+            for i in range(self.n_heads):
+                 # Call generate_KQV without precomputed args to force regeneration
+                 # It will respect noanneal internally
+                 self.generate_KQV(i) 
+            self.last_regen_time_int = new_time_int
+
         # Return updated time
-        return current_time + eta # Return time after step of size eta
+        return new_time
 

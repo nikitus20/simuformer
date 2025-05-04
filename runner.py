@@ -48,10 +48,10 @@ def parse_args():
     # Core parameters from spec
     parser.add_argument("--norm", type=str, default=DEFAULT_NORM, choices=["postln", "preln", "periln", "ngpt"], 
                         help="Normalization mode (postln, preln, periln, or ngpt)")
-    parser.add_argument("--randomV", type=int, default=DEFAULT_RANDOM_V, choices=[0, 1, 2, 3, 4],
-                        help="V matrix initialization mode (0=identity, 1=random, 2=BF/norm, 3=-BF/norm, 4=GPT-2 style std=0.02)")
-    parser.add_argument("--randomKQ", type=int, default=DEFAULT_RANDOM_KQ, choices=[0, 1, 2, 3, 4],
-                        help="KQ bilinear form init mode (0=identity, 1=random*random, 2=symmetric, 3=orthogonal-like, 4=GPT-2 style std=0.02)")
+    parser.add_argument("--randomV", type=int, default=DEFAULT_RANDOM_V, choices=[0, 1, 2, 3, 4, 5],
+                        help="V matrix initialization mode (0=id, 1=rand, 2=BF/n, 3=-BF/n, 4=GPT2, 5=GPT2+regen@int(t))")
+    parser.add_argument("--randomKQ", type=int, default=DEFAULT_RANDOM_KQ, choices=[0, 1, 2, 3, 4, 5],
+                        help="KQ bilinear form init mode (0=id, 1=rand*rand, 2=sym, 3=orth, 4=GPT2, 5=GPT2+regen@int(t))")
     parser.add_argument("--sequential", action="store_true", default=False,
                         help="Use sequential (causal) masking in attention")
 
