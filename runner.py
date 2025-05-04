@@ -244,56 +244,68 @@ if __name__ == "__main__":
     result_filename = f"{result_basename}.pkl"
     log_filename = f"{result_basename}.log"
 
-    print(f'\n--- Starting Experiment ---')
-    print(f'Device: {device}') # Print the selected device
-    # Convert Namespace to dict for printing/saving if needed
-    args_dict = vars(args)
-    # Remove device object before printing/saving if it causes issues
-    args_dict_printable = {k: v for k, v in args_dict.items() if k != 'device'}
-    args_dict_printable['device_type'] = str(device.type) # Store device type as string
-    print(f'Parameters: {args_dict_printable}') 
-    print(f'Output prefix: {result_basename}')
-
-    start_time = time.time()
-
-    # Run the experiment sweep
-    results = do_results(args=args)
-
-    # Add args to the results dict for saving context
-    # Save the printable version without the device object
-    results['args'] = args_dict_printable 
-
-    # Save results to a pickle file
-    try:
-        with open(result_filename, 'wb') as f:
-            pickle.dump(results, f)
-        print(f'Results saved to: {result_filename}')
-    except Exception as e:
-        print(f"[ERROR] Failed to save results pickle: {e}")
-
-    end_time = time.time()
-    total_time_sec = end_time - start_time
-    total_time_min = total_time_sec / 60.0
-    print(f'--- Experiment Completed ---')
-    print(f'Total time: {total_time_sec:.2f} seconds ({total_time_min:.2f} minutes)')
-
-    # Save log content to a file
-    log_content = f'Experiment Settings:\n{args_dict_printable}\n\n'
-    log_content += f'Device: {device.type}\n' # Use device.type
-    log_content += f'Results File: {result_filename}\n'
-    log_content += f'Total execution time: {total_time_sec:.2f} seconds ({total_time_min:.2f} minutes)\n'
-    try:
-        with open(log_filename, 'w') as f:
-            f.write(log_content)
-        print(f'Log saved to: {log_filename}')
-    except Exception as e:
-        print(f"[ERROR] Failed to save log file: {e}")
-
-    # Plot the results (optional)
-    if not args.no_plot:
-        print("Generating plots...")
-        # Pass the original args object (which includes device type string) to plot_pickle if needed
-        # Currently plot_pickle reads args from the pickle file, which now contains the string 'device_type'
-        plot_pickle(result_filename)
+    # --- Check if result file already exists ---
+    if os.path.exists(result_filename):
+        print(f"\n[INFO] Result file already exists, skipping computation:")
+        print(f"  {result_filename}")
+        # Optionally, load existing results if needed later, though not strictly necessary
+        # results = None # Or load pickle if you need args from it for plotting title fallback
     else:
-        print("Plotting skipped (--no_plot specified).")
+        print(f'\n--- Starting Experiment ---')
+        print(f'Device: {device}') # Print the selected device
+        # Convert Namespace to dict for printing/saving if needed
+        args_dict = vars(args)
+        # Remove device object before printing/saving if it causes issues
+        args_dict_printable = {k: v for k, v in args_dict.items() if k != 'device'}
+        args_dict_printable['device_type'] = str(device.type) # Store device type as string
+        print(f'Parameters: {args_dict_printable}') 
+        print(f'Output prefix: {result_basename}')
+
+        start_time = time.time()
+
+        # Run the experiment sweep
+        results = do_results(args=args)
+
+        # Add args to the results dict for saving context
+        # Save the printable version without the device object
+        results['args'] = args_dict_printable 
+
+        # Save results to a pickle file
+        try:
+            with open(result_filename, 'wb') as f:
+                pickle.dump(results, f)
+            print(f'Results saved to: {result_filename}')
+        except Exception as e:
+            print(f"[ERROR] Failed to save results pickle: {e}")
+
+        end_time = time.time()
+        total_time_sec = end_time - start_time
+        total_time_min = total_time_sec / 60.0
+        print(f'--- Experiment Completed ---')
+        print(f'Total time: {total_time_sec:.2f} seconds ({total_time_min:.2f} minutes)')
+
+        # Save log content to a file
+        log_content = f'Experiment Settings:\n{args_dict_printable}\n\n'
+        log_content += f'Device: {device.type}\n' # Use device.type
+        log_content += f'Results File: {result_filename}\n'
+        log_content += f'Total execution time: {total_time_sec:.2f} seconds ({total_time_min:.2f} minutes)\n'
+        try:
+            with open(log_filename, 'w') as f:
+                f.write(log_content)
+            print(f'Log saved to: {log_filename}')
+        except Exception as e:
+            print(f"[ERROR] Failed to save log file: {e}")
+
+    # --- Plotting (runs even if computation was skipped) ---
+    if not args.no_plot:
+        # Check if the result file exists before trying to plot
+        if os.path.exists(result_filename):
+            print("\nGenerating plots...")
+            # Pass the original args object (which includes device type string) to plot_pickle if needed
+            # Currently plot_pickle reads args from the pickle file, which now contains the string 'device_type'
+            # plot_pickle expects the filename, not the results dict
+            plot_pickle(result_filename)
+        else:
+            print(f"\n[WARN] Cannot plot. Result file not found (and computation was skipped or failed): {result_filename}")
+    else:
+        print("\nPlotting skipped (--no_plot specified).")
