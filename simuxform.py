@@ -315,7 +315,7 @@ class SimuXForm:
                 # Then normalize M_next (residual connection)
 
                 # <r, A> calculation (sum over dmodel dimension)
-                rA_dot = torch.sum(self.r.unsqueeze(-1) * A, dim=-1, keepdim=True)
+                rA_dot = torch.sum(self.r.unsqueeze(-1) * A, dim=-1)
                 self.r += eta * rA_dot
 
                 # <M, A> projection term
@@ -332,7 +332,7 @@ class SimuXForm:
                  A_normalized = A / A_norm
                  
                  # Update r: r_dot = <r, A/|A|> => r_next = r + eta * <r, A/|A|>
-                 rA_norm_dot = torch.sum(self.r.unsqueeze(-1) * A_normalized, dim=-1, keepdim=True)
+                 rA_norm_dot = torch.sum(self.r.unsqueeze(-1) * A_normalized, dim=-1)
                  self.r += eta * rA_norm_dot
 
                  # Update M: M_dot = A / (r * |A|) => M_next = M + eta * A / (r * |A|)
@@ -360,9 +360,3 @@ class SimuXForm:
         # Return updated time
         return current_time + eta # Return time after step of size eta
 
-
-# Functions moved to runner.py:
-# - do_single_beta
-# - do_results
-# Function moved to plot_utils.py:
-# - plot_pickle
