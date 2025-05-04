@@ -253,96 +253,112 @@ class SimuXForm:
         use_softmax = getattr(args, 'use_softmax', True) 
 
         with torch.no_grad():
-            # --- Sequential Update Structure ---
-            # Start with current M for this step. M_current will be updated sequentially by each head.
-            M_current = self.M.clone() 
+            # Aggregate V*softmax(K^T Q)
+            # M shape [batch, ntokens, dmodel]
+            # BF[i] shape [batch?, dmodel, dmodel]
+            # V[i] shape [batch?, dmodel, dmodel]
 
-            for i in range(self.n_heads):
-                # Get head-specific matrices (BF and V)
-                bf_i = self.BF[i] 
-                v_i = self.V[i]   
-                # Expand shared matrices (pp=1) to batch dimension if needed
-                if bf_i is not None and bf_i.shape[0] == 1 and batch > 1: bf_i = bf_i.expand(batch, -1, -1)
-                if v_i is not None and v_i.shape[0] == 1 and batch > 1: v_i = v_i.expand(batch, -1, -1)
+            # Need to handle potential batch dim in BF/V if noanneal=0
+            # Let's ensure BF/V are expanded for batch if needed
+            # M2 is the aggregation accumulator, re-initialize
+            self.M2.zero_() 
 
-                # --- Attention Calculation ---
-                # 1. Calculate QK Scores (Apply K^T Q transform if specified)
-                if args.randomKQ > 0 and bf_i is not None: 
-                    # M2 = M_current @ BF[i]
-                    M2_scores = torch.einsum('bni,bij->bnj', M_current, bf_i)
-                else: # randomKQ == 0 (Identity K^T Q)
-                    M2_scores = M_current # No transform needed
+            for i in range(n_heads):
+                # Handle potential batch dimension mismatch (pp vs batch)
+                bf_i = self.BF[i].expand(batch, -1, -1) if self.BF[i].size(0) == 1 and batch > 1 else self.BF[i]
+                v_i = self.V[i].expand(batch, -1, -1) if self.V[i].size(0) == 1 and batch > 1 else self.V[i]
 
-                # Calculate raw scores (Attention Logits): M2_scores @ M_current^T
-                SM = torch.einsum('bni,bji->bnj', M2_scores, M_current) # [b, n, n]
-                SM *= self.beta # Scale by beta
+                # Calculate Q^T K equivalent: M @ BF[i] @ M^T
+                # Use torch.baddbmm for potentially better performance/memory
+                # Input (M): [b, n, d], Mat1 (BF[i]): [b, d, d], Mat2 (M.transpose): [b, d, n]
+                # Result (SM): [b, n, n]
+                self.SM = torch.bmm(torch.bmm(self.M, bf_i), self.M.transpose(1, 2))
 
-                # 2. Apply Softmax / Normalization
+                # Apply causal masking if sequential
+                if args.sequential:
+                     mask = torch.triu(torch.full((ntokens, ntokens), float('-inf'), device=device), diagonal=1)
+                     self.SM += mask.unsqueeze(0) # Add mask with batch dim
+
+                # Apply beta scaling
+                self.SM *= self.beta
+
+                # Normalize attention scores
+                use_softmax = getattr(args, 'use_softmax', True) 
                 if use_softmax:
-                    if args.sequential: # Apply causal mask (lower triangular)
-                        mask = torch.tril(torch.ones(ntokens, ntokens, device=device, dtype=torch.bool)).unsqueeze(0) # [1, n, n]
-                        SM = SM.masked_fill(~mask, float('-inf')) # Mask upper triangle FOR NON-DIAGONAL
-                    
-                    attn_weights = torch.nn.functional.softmax(SM, dim=2) # [b, n, n]
+                     self.SM = torch.softmax(self.SM, dim=2)
+                else: # Use scaled exp without full softmax normalization
+                     self.SM = torch.exp(self.SM)
+
+                # Calculate aggregated values: A = SM @ M @ V[i]
+                # Result (A_head): [b, n, d]
+                # Use torch.baddbmm or chained bmm
+                A_head = torch.bmm(self.SM, torch.bmm(self.M, v_i))
+
+                # Accumulate attention output scaled by 1/n_heads
+                self.M2 += A_head / n_heads 
+            
+            # M2 now holds the aggregated attention output 'A' from the paper's notation
+            A = self.M2 
+
+            # Apply normalization and update steps based on the mode
+            if args.norm == 'postln':
+                # Simple Euler step: M_next = M + eta * A
+                # Then normalize M_next
+                self.M += eta * A
+                self.M = torch.nn.functional.normalize(self.M, dim=2)
+                # r remains 1 (or isn't used)
                 
-                else: # Use simple scaled exp normalization
-                    attn_weights = torch.exp(SM)
-                    # Normalize rows (or cols?) - original code divided by ntokens
-                    # Let's assume row normalization similar to softmax, sum exp first
-                    # attn_weights = attn_weights / attn_weights.sum(dim=2, keepdim=True).clamp(min=1e-9) # More stable normalization
-                    # Sticking to original code's normalization:
-                    attn_weights /= ntokens 
+            elif args.norm == 'preln':
+                # Update r: r_dot = <r, A> => r_next = r + eta * <r, A>
+                # Project A onto the tangent space of M: A_tangent = A - <M, A> * M
+                # Update M: M_next = M + eta * A_tangent / r 
+                # Then normalize M_next (residual connection)
 
-                # --- Value Mixing & Update ---
-                # 3. Weighted Sum (Value Mixing): attn_weights @ M_current
-                # M2_values = torch.bmm(attn_weights, M_current) # [b, n, n] @ [b, n, d] -> [b, n, d]
-                M2_values = torch.einsum('bnj,bjd->bnd', attn_weights, M_current) # Intermediate value vector
+                # <r, A> calculation (sum over dmodel dimension)
+                rA_dot = torch.sum(self.r.unsqueeze(-1) * A, dim=-1, keepdim=True)
+                self.r += eta * rA_dot
 
-                # 4. Pre-LayerNorm Logic (Update scaling factor r if using preln)
-                if args.norm == "preln":
-                    # Project M2_values onto M_current
-                    dot = torch.einsum('bnd,bnd->bn', M2_values, M_current) # Elementwise product sum -> [b, n]
-                    # Update scaling factors 'r'
-                    self.r.add_( (eta / n_heads) * dot ) # In-place add is efficient
-                    # Avoid r becoming zero or negative if updates are large/negative? Clamp maybe?
-                    # torch.clamp_(self.r, min=1e-6) # Optional: prevent issues with division
+                # <M, A> projection term
+                MA_proj = torch.sum(self.M * A, dim=-1, keepdim=True) * self.M
+                A_tangent = A - MA_proj
 
-                # 5. Apply Update with Scaling (based on norm type)
-                if args.norm == "preln":
-                     # Use scaling factor r
-                     inv_r = torch.reciprocal(self.r).unsqueeze(-1) # [b, n, 1], use reciprocal for potential speed/stability
-                     M_update_delta = M2_values * (eta / n_heads) * inv_r
-                elif args.norm == "postln":
-                     # No scaling factor 'r', just standard update scaled by eta/n_heads
-                     M_update_delta = M2_values * (eta / n_heads)
-                else: 
-                     # Default or unknown norm type? Fallback to postln behavior.
-                     print(f"[WARN] Unknown norm type: {args.norm}. Defaulting to postln behavior in step.")
-                     M_update_delta = M2_values * (eta / n_heads)
+                # Update M using r in the denominator (add epsilon for stability)
+                self.M += eta * A_tangent / (self.r + 1e-9)
+                self.M = torch.nn.functional.normalize(self.M, dim=2)
 
-                # Calculate the state before the V transform: M_current + update_delta
-                M_intermediate = M_current + M_update_delta
+            elif args.norm == 'periln':
+                 # Calculate A_norm = |A| + eps
+                 A_norm = torch.norm(A, dim=-1, keepdim=True) + 1e-9
+                 A_normalized = A / A_norm
+                 
+                 # Update r: r_dot = <r, A/|A|> => r_next = r + eta * <r, A/|A|>
+                 rA_norm_dot = torch.sum(self.r.unsqueeze(-1) * A_normalized, dim=-1, keepdim=True)
+                 self.r += eta * rA_norm_dot
 
-                # 6. Apply V transform (Output Projection) if specified
-                if args.randomV > 0 and v_i is not None:
-                    # M_next_head_input = torch.bmm(M_intermediate, v_i) # [b, n, d] @ [b, d, d] -> [b, n, d]
-                    M_next_head_input = torch.einsum('bni,bij->bnj', M_intermediate, v_i)
-                else: # randomV == 0 (Identity V)
-                    M_next_head_input = M_intermediate
+                 # Update M: M_dot = A / (r * |A|) => M_next = M + eta * A / (r * |A|)
+                 # Note: A / (r * |A|) = (A / |A|) / r = A_normalized / r
+                 # Project M_dot onto tangent space? No, the update eq is just M_dot = A/(r|A|)
+                 # Then normalize M_next 
+                 self.M += eta * A_normalized / (self.r + 1e-9)
+                 self.M = torch.nn.functional.normalize(self.M, dim=2)
 
-                # 7. Normalization (Acts as Post-LayerNorm in this structure)
-                # Normalize the result before feeding to the next head (or as final output)
-                M_current = torch.nn.functional.normalize(M_next_head_input, dim=2)
+            elif args.norm == 'ngpt':
+                 # r_k = 1 (implicitly, self.r is not updated or used in the M update)
+                 # M_dot = 0.2 * A / |A| => M_next = M + eta * 0.2 * A / |A|
+                 # Then normalize M_next
 
-            # --- End Head Loop (Sequential Update) ---
+                 # Calculate A_norm = |A| + eps
+                 A_norm = torch.norm(A, dim=-1, keepdim=True) + 1e-9
+                 A_normalized = A / A_norm
 
-            # Final state for this step is the M_current after the last head
-            self.M = M_current
+                 self.M += eta * 0.2 * A_normalized
+                 self.M = torch.nn.functional.normalize(self.M, dim=2)
+
+            else:
+                raise ValueError(f"Unknown normalization mode: {args.norm}")
 
         # Return updated time
-        new_time = current_time + eta # Step advances by eta
-
-        return new_time
+        return current_time + eta # Return time after step of size eta
 
 
 # Functions moved to runner.py:

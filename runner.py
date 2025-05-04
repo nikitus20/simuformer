@@ -46,8 +46,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run SimuXForm particle simulation experiments.")
     
     # Core parameters from spec
-    parser.add_argument("--norm", type=str, default=DEFAULT_NORM, choices=["postln", "preln"], 
-                        help="Normalization mode (postln or preln)")
+    parser.add_argument("--norm", type=str, default=DEFAULT_NORM, choices=["postln", "preln", "periln", "ngpt"], 
+                        help="Normalization mode (postln, preln, periln, or ngpt)")
     parser.add_argument("--randomV", type=int, default=DEFAULT_RANDOM_V, choices=[0, 1, 2, 3, 4],
                         help="V matrix initialization mode (0=identity, 1=random, 2=BF/norm, 3=-BF/norm, 4=GPT-2 style std=0.02)")
     parser.add_argument("--randomKQ", type=int, default=DEFAULT_RANDOM_KQ, choices=[0, 1, 2, 3, 4],
