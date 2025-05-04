@@ -323,7 +323,7 @@ class SimuXForm:
                 A_tangent = A - MA_proj
 
                 # Update M using r in the denominator (add epsilon for stability)
-                self.M += eta * A_tangent / (self.r + 1e-9)
+                self.M += eta * A_tangent / (self.r.unsqueeze(-1) + 1e-9)
                 self.M = torch.nn.functional.normalize(self.M, dim=2)
 
             elif args.norm == 'periln':
