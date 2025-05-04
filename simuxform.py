@@ -339,7 +339,7 @@ class SimuXForm:
                  # Note: A / (r * |A|) = (A / |A|) / r = A_normalized / r
                  # Project M_dot onto tangent space? No, the update eq is just M_dot = A/(r|A|)
                  # Then normalize M_next 
-                 self.M += eta * A_normalized / (self.r + 1e-9)
+                 self.M += eta * A_normalized / (self.r.unsqueeze(-1) + 1e-9)
                  self.M = torch.nn.functional.normalize(self.M, dim=2)
 
             elif args.norm == 'ngpt':
