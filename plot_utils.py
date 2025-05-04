@@ -86,8 +86,10 @@ def plot_pickle(fname: str):
         output_dir = "." # Default to current directory if path is just a filename
     
     if args_available:
-        # Construct a descriptive base filename
-        base_plot_fname = f"plot_d{dmodel}_n{ntokens}_norm{norm_val}"
+        # Construct a descriptive base filename including V and KQ modes
+        randomV = getattr(args, 'randomV', 'NA')
+        randomKQ = getattr(args, 'randomKQ', 'NA')
+        base_plot_fname = f"plot_d{dmodel}_n{ntokens}_norm{norm_val}_V{randomV}_KQ{randomKQ}"
     else:
         # Fallback to using the pickle filename base if args weren't available
         base_plot_fname = os.path.splitext(os.path.basename(fname))[0]
